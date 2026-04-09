@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <Servo.h>
 #include <LiquidCrystal_I2C.h>
 
 // Inställningar för displayen (0x27)
@@ -9,6 +10,7 @@ const int pinCLK = 4;
 const int pinDT = 3;    
 const int pinSW = 2;    
 const int pinBuzzer = 8; // (+) benet på KPEG251 till D8, (-) till GND
+const int pinServo = 9;
 
 struct PomodoroProgram {
   int workMin;
@@ -34,12 +36,16 @@ unsigned long startTime;
 unsigned long timeLeft;
 int currentCycle = 1;
 bool isBreak = false;
+Servo servo;
 
 void setup() {
   pinMode(pinCLK, INPUT_PULLUP);
   pinMode(pinDT, INPUT_PULLUP);
   pinMode(pinSW, INPUT_PULLUP);
   pinMode(pinBuzzer, OUTPUT);
+
+  servo.attach(9);
+  cymbalOut();
 
   lcd.init();
   lcd.backlight();
@@ -67,14 +73,24 @@ void loop() {
   }
 }
 
+void cymbalOut() {
+  servo.write(45);
+}
+
+void cymbalIn() {
+  servo.write(0);
+}
+
 // Ljudfunktion för KPEG251
 void makeBeep(int count, int ms) {
+  cymbalOut();
   for (int i = 0; i < count; i++) {
     digitalWrite(pinBuzzer, HIGH);
     delay(ms);
     digitalWrite(pinBuzzer, LOW);
     if (count > 1) delay(100); 
   }
+  cymbalIn();
 }
 
 void handleEncoder() {
@@ -110,6 +126,7 @@ void displayMenu() {
 }
 
 void startPomodoro() {
+  cymbalOut();
   running = true;
   currentCycle = 1;
   isBreak = false;
