@@ -34,6 +34,7 @@ int lastCLK;
 bool running = false;
 unsigned long startTime;
 unsigned long timeLeft;
+unsigned long lastRemainingSecs = 999999; // Håller koll på senast utskrivna sekund
 int currentCycle = 1;
 bool isBreak = false;
 Servo servo;
@@ -41,6 +42,13 @@ Servo servo;
 bool cymbalActive = false;
 unsigned long cymbalStartTime = 0;
 unsigned long cymbalDuration = 0;
+
+// --- Servo oscillation state ---
+bool servoOscillating = false;      // true while oscillating
+unsigned long lastServoMoveTime = 0; // last time servo was moved
+const int SERVO_STEP_DELAY = 10;     // ms between each degree step
+int servoCurrentAngle = 0;           // current angle
+int servoDirection = 1;              // 1 = moving to 45, -1 = moving to 0
 
 void setup() {
   pinMode(pinCLK, INPUT_PULLUP);
@@ -59,6 +67,7 @@ void setup() {
 }
 
 void loop() {
+  updateCymbal(); // advance servo oscillation each iteration
   if (!running) {
     handleEncoder();
     if (digitalRead(pinSW) == LOW) {
@@ -76,24 +85,49 @@ void loop() {
   }
 }
 
-void cymbalOut() {
-  servo.write(45);
+// Call once to start continuous 0–45° oscillation
+void startCymbal() {
+  servoOscillating = true;
+  servoCurrentAngle = 0;
+  servoDirection = 1;
+  lastServoMoveTime = millis();
+  servo.write(servoCurrentAngle);
 }
 
-void cymbalIn() {
+// Call once to stop oscillation and return servo to 0°
+void stopCymbal() {
+  servoOscillating = false;
+  servoCurrentAngle = 0;
   servo.write(0);
+}
+
+// Must be called every loop() iteration to advance the sweep
+void updateCymbal() {
+  if (!servoOscillating) return;
+  unsigned long now = millis();
+  if (now - lastServoMoveTime >= SERVO_STEP_DELAY) {
+    lastServoMoveTime = now;
+    servoCurrentAngle += servoDirection;
+    if (servoCurrentAngle >= 45) {
+      servoCurrentAngle = 45;
+      servoDirection = -1;   // reverse: sweep back to 0
+    } else if (servoCurrentAngle <= 0) {
+      servoCurrentAngle = 0;
+      servoDirection = 1;    // reverse: sweep to 45
+    }
+    servo.write(servoCurrentAngle);
+  }
 }
 
 // Ljudfunktion för KPEG251
 void makeBeep(int count, int ms) {
-  cymbalOut();
+  startCymbal();
   for (int i = 0; i < count; i++) {
     digitalWrite(pinBuzzer, HIGH);
     delay(ms);
     digitalWrite(pinBuzzer, LOW);
     if (count > 1) delay(100); 
   }
-  cymbalIn();
 }
 
 void handleEncoder() {
@@ -129,7 +163,6 @@ void displayMenu() {
 }
 
 void startPomodoro() {
-  cymbalOut();
   running = true;
   currentCycle = 1;
   isBreak = false;
@@ -142,6 +175,7 @@ void startPomodoro() {
 void setTimer(int minutes, int seconds) {
   startTime = millis();
   timeLeft = ((unsigned long)minutes * 60 + seconds) * 1000;
+  lastRemainingSecs = 999999; // Tvinga skärmuppdatering direkt
   
   lcd.setCursor(0, 0);
   if (isBreak) lcd.print("RAST!        ");
@@ -155,22 +189,28 @@ void updateTimer() {
     nextStep();
   } else {
     unsigned long remaining = (timeLeft - elapsed) / 1000;
-    int mins = remaining / 60;
-    int secs = remaining % 60;
-
-    lcd.setCursor(0, 1);
-    lcd.print(isBreak ? "V:" : "J:"); 
-    if (mins < 10) lcd.print("0");
-    lcd.print(mins);
-    lcd.print(":");
-    if (secs < 10) lcd.print("0");
-    lcd.print(secs);
     
-    lcd.print(" Set:");
-    lcd.print(currentCycle);
-    lcd.print("/");
-    lcd.print(programs[currentProgram].totalCycles);
-    lcd.print(" "); 
+    // Uppdatera ENDAST displayen om sekunden har ändrats
+    if (remaining != lastRemainingSecs) {
+      lastRemainingSecs = remaining;
+      
+      int mins = remaining / 60;
+      int secs = remaining % 60;
+
+      lcd.setCursor(0, 1);
+      lcd.print(isBreak ? "V:" : "J:"); 
+      if (mins < 10) lcd.print("0");
+      lcd.print(mins);
+      lcd.print(":");
+      if (secs < 10) lcd.print("0");
+      lcd.print(secs);
+      
+      lcd.print(" Set:");
+      lcd.print(currentCycle);
+      lcd.print("/");
+      lcd.print(programs[currentProgram].totalCycles);
+      lcd.print(" "); 
+    }
   }
 }
 
