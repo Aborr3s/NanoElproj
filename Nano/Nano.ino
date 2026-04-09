@@ -38,6 +38,10 @@ int currentCycle = 1;
 bool isBreak = false;
 Servo servo;
 
+bool cymbalActive = false;
+unsigned long cymbalStartTime = 0;
+unsigned long cymbalDuration = 0;
+
 void setup() {
   pinMode(pinCLK, INPUT_PULLUP);
   pinMode(pinDT, INPUT_PULLUP);
@@ -45,7 +49,6 @@ void setup() {
   pinMode(pinBuzzer, OUTPUT);
 
   servo.attach(9);
-  cymbalOut();
 
   lcd.init();
   lcd.backlight();
