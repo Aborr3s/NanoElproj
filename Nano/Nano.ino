@@ -2,6 +2,29 @@
 #include <Servo.h>
 #include <LiquidCrystal_I2C.h>
 
+// Ikoner (Upp/Ner pilar)
+byte upArrow[8] = {
+  0b00100,
+  0b01110,
+  0b11111,
+  0b00100,
+  0b00100,
+  0b00100,
+  0b00100,
+  0b00000
+};
+
+byte downArrow[8] = {
+  0b00100,
+  0b00100,
+  0b00100,
+  0b00100,
+  0b11111,
+  0b01110,
+  0b00100,
+  0b00000
+};
+
 // Inställningar för displayen (0x27)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -26,7 +49,7 @@ PomodoroProgram programs[] = {
   {25, 0, 5, 0, 4, "Standard (4x)"},
   {50, 0, 10, 0, 2, "Intensiv (2x)"},
   {90, 0, 20, 0, 1, "Deep Work (1x)"},
-  {0, 10, 0, 5, 2, "Testläge (10s)"} // 10 sek jobb, 5 sek vila, 2 varv
+  {0, 10, 0, 5, 2, "Testlage (10s)"} // 10 sek jobb, 5 sek vila, 2 varv
 };
 
 int currentProgram = 0;
@@ -60,6 +83,10 @@ void setup() {
 
   lcd.init();
   lcd.backlight();
+  
+  // Ladda in specialtecken (plats 0 och 1)
+  lcd.createChar(0, upArrow);
+  lcd.createChar(1, downArrow);
   
   lastCLK = digitalRead(pinCLK);
   lcd.clear();
@@ -132,7 +159,7 @@ void makeBeep(int count, int ms) {
 
 void handleEncoder() {
   int currentCLK = digitalRead(pinCLK);
-  if (currentCLK != lastCLK && currentCLK == 0) {
+  if (currentCLK != lastCLK) {
     if (digitalRead(pinDT) != currentCLK) {
       currentProgram--; 
     } else {
@@ -147,9 +174,14 @@ void handleEncoder() {
 }
 
 void displayMenu() {
+  lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(programs[currentProgram].name);
-  lcd.print("     ");
+  
+  // Skriv över resterna med blanksteg (fram till kolumn 13)
+  for(int i = strlen(programs[currentProgram].name); i < 14; i++) {
+    lcd.print(" ");
+  }
   
   lcd.setCursor(0, 1);
   if (currentProgram == 3) {
@@ -160,6 +192,12 @@ void displayMenu() {
     lcd.print(programs[currentProgram].breakMin);
     lcd.print("m [Klicka]  ");
   }
+
+  // Rita pilarna längst till höger (kolumn 14 och 15)
+  lcd.setCursor(15, 0);
+  lcd.write(0); // Upp-pil
+  lcd.setCursor(15, 1);
+  lcd.write(1); // Ner-pil
 }
 
 void startPomodoro() {
