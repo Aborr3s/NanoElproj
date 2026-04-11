@@ -1,55 +1,41 @@
-#include <Wire.h>
-#include <Servo.h>
 #include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+#include <Wire.h>
+
 
 // Ikoner (Upp/Ner pilar)
-byte upArrow[8] = {
-  0b00100,
-  0b01110,
-  0b11111,
-  0b00100,
-  0b00100,
-  0b00100,
-  0b00100,
-  0b00000
-};
+byte upArrow[8] = {0b00100, 0b01110, 0b11111, 0b00100,
+                   0b00100, 0b00100, 0b00100, 0b00000};
 
-byte downArrow[8] = {
-  0b00100,
-  0b00100,
-  0b00100,
-  0b00100,
-  0b11111,
-  0b01110,
-  0b00100,
-  0b00000
-};
+byte downArrow[8] = {0b00100, 0b00100, 0b00100, 0b00100,
+                     0b11111, 0b01110, 0b00100, 0b00000};
 
 // Inställningar för displayen (0x27)
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // PINS
-const int pinCLK = 4;   
-const int pinDT = 3;    
-const int pinSW = 2;    
+const int pinCLK = 4;
+const int pinDT = 5;
+const int pinSW = 6;
 const int pinBuzzer = 8; // (+) benet på KPEG251 till D8, (-) till GND
-const int pinServo = 9;
+const int pinServo = 10;
+const int pinFaceDetect = 3; // Ansiktsdetektor: LOW = inget ansikte, HIGH = ansikte
 
 struct PomodoroProgram {
   int workMin;
-  int workSec;      // Lagt till sekunder för testläge
+  int workSec; // Lagt till sekunder för testläge
   int breakMin;
-  int breakSec;     // Lagt till sekunder för testläge
+  int breakSec; // Lagt till sekunder för testläge
   int totalCycles;
-  char name[16]; 
+  char name[16];
 };
 
 // Programmen inklusive det nya testläget längst ner
 PomodoroProgram programs[] = {
-  {25, 0, 5, 0, 4, "Standard (4x)"},
-  {50, 0, 10, 0, 2, "Intensiv (2x)"},
-  {90, 0, 20, 0, 1, "Deep Work (1x)"},
-  {0, 10, 0, 5, 2, "Testlage (10s)"} // 10 sek jobb, 5 sek vila, 2 varv
+    {25, 0, 5, 0, 4, "Standard (4x)"},
+    {50, 0, 10, 0, 2, "Intensiv (2x)"},
+    {90, 0, 20, 0, 1, "Deep Work (1x)"},
+    {0, 10, 0, 5, 2, "Testlage (10s)"} // 10 sek jobb, 5 sek vila, 2 varv
 };
 
 int currentProgram = 0;
@@ -57,7 +43,8 @@ int lastCLK;
 bool running = false;
 unsigned long startTime;
 unsigned long timeLeft;
-unsigned long lastRemainingSecs = 999999; // Håller koll på senast utskrivna sekund
+unsigned long lastRemainingSecs =
+    999999; // Håller koll på senast utskrivna sekund
 int currentCycle = 1;
 bool isBreak = false;
 Servo servo;
@@ -67,9 +54,9 @@ unsigned long cymbalStartTime = 0;
 unsigned long cymbalDuration = 0;
 
 // --- Servo oscillation state ---
-bool servoOscillating = false;      // true while oscillating
+bool servoOscillating = false;       // true while oscillating
 unsigned long lastServoMoveTime = 0; // last time servo was moved
-const int SERVO_STEP_DELAY = 10;     // ms between each degree step
+const int SERVO_STEP_DELAY = 4;     // ms between each degree step
 int servoCurrentAngle = 0;           // current angle
 int servoDirection = 1;              // 1 = moving to 45, -1 = moving to 0
 
@@ -78,27 +65,31 @@ void setup() {
   pinMode(pinDT, INPUT_PULLUP);
   pinMode(pinSW, INPUT_PULLUP);
   pinMode(pinBuzzer, OUTPUT);
+  pinMode(pinFaceDetect, INPUT);
+    pinMode(13, OUTPUT);
 
-  servo.attach(9);
+
+  servo.attach(10);
 
   lcd.init();
   lcd.backlight();
-  
+
   // Ladda in specialtecken (plats 0 och 1)
   lcd.createChar(0, upArrow);
   lcd.createChar(1, downArrow);
-  
+
   lastCLK = digitalRead(pinCLK);
   lcd.clear();
   displayMenu();
 }
 
 void loop() {
-  updateCymbal(); // advance servo oscillation each iteration
+  updateCymbal();        // Uppdatera servosvängning varje iteration
+  handleFaceDetector();  // Läs ansiktsdetektor och styr servo
   if (!running) {
     handleEncoder();
     if (digitalRead(pinSW) == LOW) {
-      delay(400); 
+      delay(400);
       startPomodoro();
     }
   } else {
@@ -109,6 +100,23 @@ void loop() {
       lcd.clear();
       displayMenu();
     }
+  }
+}
+
+// Läser pin 3 (ansiktsdetektor) och styr servon under pluggsession
+void handleFaceDetector() {
+  // Endast aktiv under jobbfas
+  if (!running || isBreak) return;
+
+  int faceSignal = digitalRead(pinFaceDetect);
+  if (faceSignal == LOW && !servoOscillating) {
+    // Inget ansikte detekterat → starta servon
+    digitalWrite(13, HIGH);
+    startCymbal();
+  } else if (faceSignal == HIGH && servoOscillating) {
+    // Ansikte detekterat → stoppa servon
+    stopCymbal();
+    digitalWrite(13, LOW);
   }
 }
 
@@ -131,16 +139,17 @@ void stopCymbal() {
 // Must be called every loop() iteration to advance the sweep
 void updateCymbal() {
   if (!servoOscillating) return;
+  
   unsigned long now = millis();
   if (now - lastServoMoveTime >= SERVO_STEP_DELAY) {
     lastServoMoveTime = now;
     servoCurrentAngle += servoDirection;
-    if (servoCurrentAngle >= 45) {
-      servoCurrentAngle = 45;
-      servoDirection = -1;   // reverse: sweep back to 0
+    if (servoCurrentAngle >= 60) {
+      servoCurrentAngle = 60;
+      servoDirection = -1; // reverse: sweep back to 0
     } else if (servoCurrentAngle <= 0) {
       servoCurrentAngle = 0;
-      servoDirection = 1;    // reverse: sweep to 45
+      servoDirection = 1; // reverse: sweep to 45
     }
     servo.write(servoCurrentAngle);
   }
@@ -153,7 +162,8 @@ void makeBeep(int count, int ms) {
     digitalWrite(pinBuzzer, HIGH);
     delay(ms);
     digitalWrite(pinBuzzer, LOW);
-    if (count > 1) delay(100); 
+    if (count > 1)
+      delay(100);
   }
 }
 
@@ -161,13 +171,15 @@ void handleEncoder() {
   int currentCLK = digitalRead(pinCLK);
   if (currentCLK != lastCLK) {
     if (digitalRead(pinDT) != currentCLK) {
-      currentProgram--; 
+      currentProgram--;
     } else {
-      currentProgram++; 
+      currentProgram++;
     }
     // Nu 4 program totalt (index 0 till 3)
-    if (currentProgram > 3) currentProgram = 0;
-    if (currentProgram < 0) currentProgram = 3;
+    if (currentProgram > 3)
+      currentProgram = 0;
+    if (currentProgram < 0)
+      currentProgram = 3;
     displayMenu();
   }
   lastCLK = currentCLK;
@@ -177,12 +189,12 @@ void displayMenu() {
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(programs[currentProgram].name);
-  
+
   // Skriv över resterna med blanksteg (fram till kolumn 13)
-  for(int i = strlen(programs[currentProgram].name); i < 14; i++) {
+  for (int i = strlen(programs[currentProgram].name); i < 14; i++) {
     lcd.print(" ");
   }
-  
+
   lcd.setCursor(0, 1);
   if (currentProgram == 3) {
     lcd.print("10s-5s TEST    ");
@@ -214,40 +226,44 @@ void setTimer(int minutes, int seconds) {
   startTime = millis();
   timeLeft = ((unsigned long)minutes * 60 + seconds) * 1000;
   lastRemainingSecs = 999999; // Tvinga skärmuppdatering direkt
-  
+
   lcd.setCursor(0, 0);
-  if (isBreak) lcd.print("RAST!        ");
-  else lcd.print("PLUGGA!      ");
+  if (isBreak)
+    lcd.print("RAST!        ");
+  else
+    lcd.print("PLUGGA!      ");
 }
 
 void updateTimer() {
   unsigned long elapsed = millis() - startTime;
-  
+
   if (elapsed >= timeLeft) {
     nextStep();
   } else {
     unsigned long remaining = (timeLeft - elapsed) / 1000;
-    
+
     // Uppdatera ENDAST displayen om sekunden har ändrats
     if (remaining != lastRemainingSecs) {
       lastRemainingSecs = remaining;
-      
+
       int mins = remaining / 60;
       int secs = remaining % 60;
 
       lcd.setCursor(0, 1);
-      lcd.print(isBreak ? "V:" : "J:"); 
-      if (mins < 10) lcd.print("0");
+      lcd.print(isBreak ? "V:" : "J:");
+      if (mins < 10)
+        lcd.print("0");
       lcd.print(mins);
       lcd.print(":");
-      if (secs < 10) lcd.print("0");
+      if (secs < 10)
+        lcd.print("0");
       lcd.print(secs);
-      
+
       lcd.print(" Set:");
       lcd.print(currentCycle);
       lcd.print("/");
       lcd.print(programs[currentProgram].totalCycles);
-      lcd.print(" "); 
+      lcd.print(" ");
     }
   }
 }
@@ -256,7 +272,8 @@ void nextStep() {
   if (!isBreak) {
     isBreak = true;
     makeBeep(3, 150); // Rast-pip
-    setTimer(programs[currentProgram].breakMin, programs[currentProgram].breakSec);
+    setTimer(programs[currentProgram].breakMin,
+             programs[currentProgram].breakSec);
   } else {
     currentCycle++;
     if (currentCycle > programs[currentProgram].totalCycles) {
@@ -264,7 +281,8 @@ void nextStep() {
     } else {
       isBreak = false;
       makeBeep(2, 300); // Jobb-pip
-      setTimer(programs[currentProgram].workMin, programs[currentProgram].workSec);
+      setTimer(programs[currentProgram].workMin,
+               programs[currentProgram].workSec);
     }
   }
 }
