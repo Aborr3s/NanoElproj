@@ -17,25 +17,24 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int pinCLK = 4;
 const int pinDT = 5;
 const int pinSW = 6;
-const int pinBuzzer = 8; // (+) benet på KPEG251 till D8, (-) till GND
+const int pinBuzzer = 8;
 const int pinServo = 10;
-const int pinFaceDetect = 3; // Ansiktsdetektor: LOW = inget ansikte, HIGH = ansikte
+const int pinFaceDetect = 3;
 
 struct PomodoroProgram {
   int workMin;
-  int workSec; // Lagt till sekunder för testläge
+  int workSec;
   int breakMin;
-  int breakSec; // Lagt till sekunder för testläge
+  int breakSec;
   int totalCycles;
   char name[16];
 };
 
-// Programmen inklusive det nya testläget längst ner
 PomodoroProgram programs[] = {
     {25, 0, 5, 0, 4, "Standard (4x)"},
     {50, 0, 10, 0, 2, "Intensiv (2x)"},
     {90, 0, 20, 0, 1, "Deep Work (1x)"},
-    {0, 10, 0, 5, 2, "Testlage (10s)"} // 10 sek jobb, 5 sek vila, 2 varv
+    {0, 10, 0, 5, 2, "Testlage (10s)"}
 };
 
 int currentProgram = 0;
@@ -43,8 +42,7 @@ int lastCLK;
 bool running = false;
 unsigned long startTime;
 unsigned long timeLeft;
-unsigned long lastRemainingSecs =
-    999999; // Håller koll på senast utskrivna sekund
+unsigned long lastRemainingSecs = 999999;
 int currentCycle = 1;
 bool isBreak = false;
 Servo servo;
@@ -54,11 +52,27 @@ unsigned long cymbalStartTime = 0;
 unsigned long cymbalDuration = 0;
 
 // --- Servo oscillation state ---
-bool servoOscillating = false;       // true while oscillating
-unsigned long lastServoMoveTime = 0; // last time servo was moved
-const int SERVO_STEP_DELAY = 4;     // ms between each degree step
-int servoCurrentAngle = 0;           // current angle
-int servoDirection = 1;              // 1 = moving to 45, -1 = moving to 0
+bool servoOscillating = false;
+unsigned long lastServoMoveTime = 0;
+const int SERVO_STEP_DELAY = 4;
+int servoCurrentAngle = 0;
+int servoDirection = 1;
+
+// --- Motiverande meddelanden ---
+const char* messages[] = {
+  "Kor hart!     ",
+  "Du fixar det! ",
+  "Fokus!        ",
+  "Snart rast!   ",
+  "Bra jobbat!   ",
+  "Halva vagen!  ",
+  "Du ar bast!   "
+};
+const int numMessages = 7;
+unsigned long lastMessageSwitch = 0;
+bool showingMessage = false;
+const unsigned long PLUGGA_DURATION = 8000;
+const unsigned long MESSAGE_DURATION = 3000;
 
 void setup() {
   pinMode(pinCLK, INPUT_PULLUP);
@@ -66,15 +80,13 @@ void setup() {
   pinMode(pinSW, INPUT_PULLUP);
   pinMode(pinBuzzer, OUTPUT);
   pinMode(pinFaceDetect, INPUT);
-    pinMode(13, OUTPUT);
-
+  pinMode(13, OUTPUT);
 
   servo.attach(10);
 
   lcd.init();
   lcd.backlight();
 
-  // Ladda in specialtecken (plats 0 och 1)
   lcd.createChar(0, upArrow);
   lcd.createChar(1, downArrow);
 
@@ -84,8 +96,9 @@ void setup() {
 }
 
 void loop() {
-  updateCymbal();        // Uppdatera servosvängning varje iteration
-  handleFaceDetector();  // Läs ansiktsdetektor och styr servo
+  updateCymbal();
+  handleFaceDetector();
+  updateMessage();       // Växla mellan PLUGGA! och motivationsmeddelande
   if (!running) {
     handleEncoder();
     if (digitalRead(pinSW) == LOW) {
@@ -103,40 +116,61 @@ void loop() {
   }
 }
 
-// Läser pin 3 (ansiktsdetektor) och styr servon under pluggsession
-void handleFaceDetector() {
-  // Endast aktiv under jobbfas
+// Växlar rad 0 mellan "PLUGGA!" och motiverande meddelande
+void updateMessage() {
   if (!running || isBreak) return;
+
+  unsigned long now = millis();
+  unsigned long duration = showingMessage ? MESSAGE_DURATION : PLUGGA_DURATION;
+
+  if (now - lastMessageSwitch >= duration) {
+    lastMessageSwitch = now;
+    showingMessage = !showingMessage;
+    lcd.setCursor(0, 0);
+    if (showingMessage) {
+      int idx = random(numMessages);
+      lcd.print(messages[idx]);
+    } else {
+      lcd.print("PLUGGA!      ");
+    }
+  }
+}
+
+void handleFaceDetector() {
+  if (!running || isBreak) {
+    if (servoOscillating) {
+      stopCymbal();
+      digitalWrite(13, LOW);
+    }
+    return;
+  }
 
   int faceSignal = digitalRead(pinFaceDetect);
   if (faceSignal == LOW && !servoOscillating) {
-    // Inget ansikte detekterat → starta servon
     digitalWrite(13, HIGH);
     startCymbal();
   } else if (faceSignal == HIGH && servoOscillating) {
-    // Ansikte detekterat → stoppa servon
     stopCymbal();
     digitalWrite(13, LOW);
   }
 }
 
-// Call once to start continuous 0–45° oscillation
 void startCymbal() {
   servoOscillating = true;
   servoCurrentAngle = 0;
   servoDirection = 1;
   lastServoMoveTime = millis();
   servo.write(servoCurrentAngle);
+  digitalWrite(pinBuzzer, HIGH);
 }
 
-// Call once to stop oscillation and return servo to 0°
 void stopCymbal() {
   servoOscillating = false;
   servoCurrentAngle = 0;
   servo.write(0);
+  digitalWrite(pinBuzzer, LOW);
 }
 
-// Must be called every loop() iteration to advance the sweep
 void updateCymbal() {
   if (!servoOscillating) return;
   
@@ -146,18 +180,16 @@ void updateCymbal() {
     servoCurrentAngle += servoDirection;
     if (servoCurrentAngle >= 60) {
       servoCurrentAngle = 60;
-      servoDirection = -1; // reverse: sweep back to 0
+      servoDirection = -1;
     } else if (servoCurrentAngle <= 0) {
       servoCurrentAngle = 0;
-      servoDirection = 1; // reverse: sweep to 45
+      servoDirection = 1;
     }
     servo.write(servoCurrentAngle);
   }
 }
 
-// Ljudfunktion för KPEG251
 void makeBeep(int count, int ms) {
-  startCymbal();
   for (int i = 0; i < count; i++) {
     digitalWrite(pinBuzzer, HIGH);
     delay(ms);
@@ -169,17 +201,16 @@ void makeBeep(int count, int ms) {
 
 void handleEncoder() {
   int currentCLK = digitalRead(pinCLK);
-  if (currentCLK != lastCLK) {
-    if (digitalRead(pinDT) != currentCLK) {
+  int currentDT  = digitalRead(pinDT);
+
+  if (currentCLK != lastCLK && currentCLK == LOW) {
+    if (currentDT != currentCLK) {
       currentProgram--;
     } else {
       currentProgram++;
     }
-    // Nu 4 program totalt (index 0 till 3)
-    if (currentProgram > 3)
-      currentProgram = 0;
-    if (currentProgram < 0)
-      currentProgram = 3;
+    if (currentProgram > 3) currentProgram = 0;
+    if (currentProgram < 0) currentProgram = 3;
     displayMenu();
   }
   lastCLK = currentCLK;
@@ -190,7 +221,6 @@ void displayMenu() {
   lcd.setCursor(0, 0);
   lcd.print(programs[currentProgram].name);
 
-  // Skriv över resterna med blanksteg (fram till kolumn 13)
   for (int i = strlen(programs[currentProgram].name); i < 14; i++) {
     lcd.print(" ");
   }
@@ -205,11 +235,10 @@ void displayMenu() {
     lcd.print("m [Klicka]  ");
   }
 
-  // Rita pilarna längst till höger (kolumn 14 och 15)
   lcd.setCursor(15, 0);
-  lcd.write(0); // Upp-pil
+  lcd.write(0);
   lcd.setCursor(15, 1);
-  lcd.write(1); // Ner-pil
+  lcd.write(1);
 }
 
 void startPomodoro() {
@@ -218,14 +247,15 @@ void startPomodoro() {
   isBreak = false;
   makeBeep(1, 400);
   lcd.clear();
-  // Räkna ut total tid i millisekunder (minuter + sekunder)
   setTimer(programs[currentProgram].workMin, programs[currentProgram].workSec);
 }
 
 void setTimer(int minutes, int seconds) {
   startTime = millis();
   timeLeft = ((unsigned long)minutes * 60 + seconds) * 1000;
-  lastRemainingSecs = 999999; // Tvinga skärmuppdatering direkt
+  lastRemainingSecs = 999999;
+  lastMessageSwitch = millis(); // Återställ meddelandetimer
+  showingMessage = false;       // Börja alltid med "PLUGGA!" eller "RAST!"
 
   lcd.setCursor(0, 0);
   if (isBreak)
@@ -242,7 +272,6 @@ void updateTimer() {
   } else {
     unsigned long remaining = (timeLeft - elapsed) / 1000;
 
-    // Uppdatera ENDAST displayen om sekunden har ändrats
     if (remaining != lastRemainingSecs) {
       lastRemainingSecs = remaining;
 
@@ -271,7 +300,8 @@ void updateTimer() {
 void nextStep() {
   if (!isBreak) {
     isBreak = true;
-    makeBeep(3, 150); // Rast-pip
+    stopCymbal();
+    makeBeep(3, 150);
     setTimer(programs[currentProgram].breakMin,
              programs[currentProgram].breakSec);
   } else {
@@ -280,7 +310,7 @@ void nextStep() {
       finishAll();
     } else {
       isBreak = false;
-      makeBeep(2, 300); // Jobb-pip
+      makeBeep(2, 300);
       setTimer(programs[currentProgram].workMin,
                programs[currentProgram].workSec);
     }
